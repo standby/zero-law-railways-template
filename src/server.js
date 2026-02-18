@@ -217,6 +217,48 @@ function requireSetupAuth(req, res, next) {
   return next();
 }
 
+// Simple rate limiting for file system operations
+// Tracks requests per IP with a sliding window
+const rateLimitMap = new Map();
+function rateLimit(maxRequests = 30, windowMs = 60000) {
+  return (req, res, next) => {
+    const ip = req.ip || req.connection?.remoteAddress || "unknown";
+    const now = Date.now();
+    
+    if (!rateLimitMap.has(ip)) {
+      rateLimitMap.set(ip, []);
+    }
+    
+    const requests = rateLimitMap.get(ip);
+    // Remove old requests outside the window
+    const validRequests = requests.filter(time => now - time < windowMs);
+    
+    if (validRequests.length >= maxRequests) {
+      return res.status(429).json({ 
+        ok: false, 
+        error: "Too many requests. Please try again later." 
+      });
+    }
+    
+    validRequests.push(now);
+    rateLimitMap.set(ip, validRequests);
+    
+    // Cleanup old entries periodically
+    if (Math.random() < 0.01) {
+      for (const [key, times] of rateLimitMap.entries()) {
+        const valid = times.filter(t => now - t < windowMs);
+        if (valid.length === 0) {
+          rateLimitMap.delete(key);
+        } else {
+          rateLimitMap.set(key, valid);
+        }
+      }
+    }
+    
+    next();
+  };
+}
+
 const app = express();
 app.disable("x-powered-by");
 app.use(express.json({ limit: "1mb" }));
@@ -272,7 +314,7 @@ app.get("/healthz", async (_req, res) => {
   });
 });
 
-app.get("/setup/app.js", requireSetupAuth, (_req, res) => {
+app.get("/setup/app.js", requireSetupAuth, rateLimit(60, 60000), (_req, res) => {
   res.type("application/javascript");
   res.send(fs.readFileSync(path.join(process.cwd(), "src", "setup-app.js"), "utf8"));
 });
@@ -458,7 +500,7 @@ function runCmd(cmd, args, opts = {}) {
   });
 }
 
-app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
+app.post("/setup/api/run", requireSetupAuth, rateLimit(10, 60000), async (req, res) => {
   try {
     if (isConfigured()) {
       await ensureGatewayRunning();
@@ -602,7 +644,7 @@ app.post("/setup/api/console/run", requireSetupAuth, async (req, res) => {
   }
 });
 
-app.post("/setup/api/reset", requireSetupAuth, async (_req, res) => {
+app.post("/setup/api/reset", requireSetupAuth, rateLimit(5, 60000), async (_req, res) => {
   try {
     if (gatewayProc) {
       try { gatewayProc.kill("SIGTERM"); } catch {}
@@ -622,7 +664,7 @@ app.post("/setup/api/reset", requireSetupAuth, async (_req, res) => {
 });
 
 // Backup/export endpoint
-app.get("/setup/export", requireSetupAuth, async (_req, res) => {
+app.get("/setup/export", requireSetupAuth, rateLimit(5, 300000), async (_req, res) => {
   try {
     if (!fs.existsSync(STATE_DIR)) {
       return res.status(404).type("text/plain").send("No state directory to export");
