@@ -57,10 +57,6 @@ const GATEWAY_TARGET = `http://${INTERNAL_GATEWAY_HOST}:${INTERNAL_GATEWAY_PORT}
 // ZeroClaw binary path
 const ZEROCLAW_BIN = process.env.ZEROCLAW_BIN?.trim() || "/usr/local/bin/zeroclaw";
 
-function zeroClawArgs(args) {
-  return args;
-}
-
 function configPath() {
   // ZeroClaw uses config.toml by default
   return path.join(STATE_DIR, "config.toml");
